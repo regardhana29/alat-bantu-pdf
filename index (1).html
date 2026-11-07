@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Alat PDF Gratis – diproses di browser</title>
+<meta name="description" content="Gabung, pisah, putar, hapus halaman, beri nomor halaman, dan ubah gambar jadi PDF. File tidak diunggah ke server.">
+<style>
+:root{--bg:#f3f6fb;--card:#fff;--ink:#0e1a2b;--mute:#5b6b82;--line:#d8e0ec;--acc:#2f54eb;--acc-ink:#fff;--soft:#e6ecff;--err:#c62828}
+@media (prefers-color-scheme:dark){:root{--bg:#0b1220;--card:#131d30;--ink:#e8eefc;--mute:#9aabc7;--line:#25324a;--acc:#6f8cff;--acc-ink:#0b1220;--soft:#1b2a4d;--err:#ff8a80}}
+*{box-sizing:border-box}
+html{scroll-padding-top:16px}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.55 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+header,main,footer{max-width:960px;margin:0 auto;padding:0 20px}
+header{padding-top:48px;padding-bottom:12px}
+h1{font-size:clamp(2rem,5vw,3rem);line-height:1.1;margin:0 0 12px;letter-spacing:-.02em}
+header p{color:var(--mute);max-width:56ch;margin:0}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:14px;margin:28px 0}
+.tool{all:unset;box-sizing:border-box;cursor:pointer;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:18px;display:block}
+.tool:hover{border-color:var(--acc)}
+.tool:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible,.drop:focus-visible{outline:3px solid var(--acc);outline-offset:2px}
+.tool[aria-pressed=true]{border-color:var(--acc);background:var(--soft)}
+.tool b{display:block;font-size:1.05rem;margin-bottom:4px}
+.tool span{color:var(--mute);font-size:.92rem}
+#panel{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:24px;margin-bottom:40px}
+#panel h2{margin:0 0 4px;font-size:1.4rem}
+#panel .desc{color:var(--mute);margin:0 0 18px}
+.drop{border:2px dashed var(--line);border-radius:10px;padding:30px 16px;text-align:center;cursor:pointer;color:var(--mute)}
+.drop.over{border-color:var(--acc);background:var(--soft)}
+.drop strong{color:var(--ink)}
+ul.files{list-style:none;margin:16px 0;padding:0;display:grid;gap:8px}
+ul.files li{display:flex;align-items:center;gap:10px;border:1px solid var(--line);border-radius:8px;padding:8px 10px}
+ul.files .n{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+ul.files .s{color:var(--mute);font-size:.85rem}
+button{font:inherit;cursor:pointer;border-radius:8px;border:1px solid var(--line);background:var(--card);color:var(--ink);padding:6px 10px}
+button.main{background:var(--acc);color:var(--acc-ink);border-color:var(--acc);padding:12px 22px;font-weight:600}
+button:disabled{opacity:.5;cursor:not-allowed}
+.opts{display:flex;gap:14px;flex-wrap:wrap;align-items:end;margin:16px 0}
+.opts label{display:grid;gap:4px;font-size:.92rem;color:var(--mute)}
+.opts input,.opts select{font:inherit;padding:8px 10px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--ink);min-width:200px}
+#msg{margin-top:14px;min-height:1.5em}
+#msg.err{color:var(--err)}
+#msg a{color:var(--acc);font-weight:600}
+footer{padding-bottom:40px;color:var(--mute);font-size:.9rem}
+.sr{position:absolute;left:-9999px}
+</style>
+</head>
+<body>
+<header>
+  <h1>Alat PDF yang jalan di browser Anda</h1>
+  <p>Gabung, pisah, putar, hapus halaman, beri nomor halaman, dan ubah gambar jadi PDF. File tidak pernah diunggah ke server, semuanya diproses di perangkat Anda.</p>
+</header>
+<main>
+  <div class="grid" id="tools" role="group" aria-label="Pilih alat"></div>
+  <section id="panel" aria-live="polite" hidden>
+    <h2 id="pt"></h2>
+    <p class="desc" id="pd"></p>
+    <div class="drop" id="drop" tabindex="0" role="button" aria-label="Pilih file">
+      <strong>Klik untuk memilih file</strong> atau seret ke sini
+    </div>
+    <input type="file" id="file" class="sr" tabindex="-1">
+    <ul class="files" id="list"></ul>
+    <div class="opts" id="opts"></div>
+    <button class="main" id="go" disabled>Proses</button>
+    <div id="msg"></div>
+  </section>
+</main>
+<footer>Dibuat dengan <a href="https://pdf-lib.js.org/" style="color:inherit">pdf-lib</a>. Kode sumber terbuka, bebas dipakai dan diubah.</footer>
+
+<script src="https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
+<script>
+const {PDFDocument, degrees, StandardFonts, rgb} = PDFLib;
+const $ = id => document.getElementById(id);
+let files = [], cur = null, busy = false;
+
+// "1-3,5,8-" -> indeks halaman berbasis 0
+function parseRanges(str, max){
+  const out = [];
+  for (const part of str.split(",").map(s => s.trim()).filter(Boolean)){
+    const m = part.match(/^(\d*)\s*-\s*(\d*)$/) || part.match(/^(\d+)$/);
+    if (!m) throw new Error(`Rentang "${part}" tidak valid. Contoh: 1-3,5,8-`);
+    let a = m[1] === "" ? 1 : +m[1];
+    let b = m.length === 2 ? a : (m[2] === "" ? max : +m[2]);
+    if (a < 1 || b > max || a > b) throw new Error(`Rentang "${part}" di luar halaman 1-${max}.`);
+    for (let i = a; i <= b; i++) out.push(i - 1);
+  }
+  if (!out.length) throw new Error("Isi rentang halaman terlebih dahulu.");
+  return out;
+}
+const loadPdf = async f => PDFDocument.load(await f.arrayBuffer(), {ignoreEncryption:false});
+const PDF = ".pdf,application/pdf", PJ = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/";
+let pjReady;
+// pdf.js dimuat hanya saat dibutuhkan (alat yang merender halaman)
+const pdfjs = () => pjReady ||= (async () => {
+  await new Promise((ok, no) => { const s = document.createElement("script"); s.src = PJ + "pdf.min.js"; s.onload = ok;
+    s.onerror = () => no(new Error("Gagal memuat pustaka dari internet. Periksa koneksi Anda.")); document.head.appendChild(s); });
+  const w = await (await fetch(PJ + "pdf.worker.min.js")).text();
+  pdfjsLib.GlobalWorkerOptions.workerSrc = URL.createObjectURL(new Blob([w], {type:"text/javascript"}));
+  return pdfjsLib;
+})();
+const openDoc = async f => (await pdfjs()).getDocument({data: new Uint8Array(await f.arrayBuffer())}).promise;
+async function renderPage(d, i, scale, type, q){
+  const pg = await d.getPage(i), vp = pg.getViewport({scale}), c = document.createElement("canvas");
+  c.width = Math.ceil(vp.width); c.height = Math.ceil(vp.height);
+  const g = c.getContext("2d"); g.fillStyle = "#fff"; g.fillRect(0, 0, c.width, c.height);
+  await pg.render({canvasContext: g, viewport: vp}).promise;
+  return {blob: await new Promise(r => c.toBlob(r, type, q)), w: vp.width / scale, h: vp.height / scale};
+}
+const rangeOpt = `<label>Halaman<input id="o-range" placeholder="Contoh: 1-3,5,8-"></label>`;
+
+const TOOLS = [
+  {id:"merge", name:"Gabung PDF", d:"Satukan beberapa PDF menjadi satu. Atur urutan dengan tombol panah.",
+   accept:".pdf,application/pdf", multi:true, min:2, order:true, out:"gabungan.pdf",
+   run: async () => {
+     const doc = await PDFDocument.create();
+     for (const f of files){
+       const src = await loadPdf(f);
+       (await doc.copyPages(src, src.getPageIndices())).forEach(p => doc.addPage(p));
+     }
+     return doc.save();
+   }},
+  {id:"extract", name:"Ambil halaman", d:"Simpan hanya halaman yang Anda pilih sebagai PDF baru.",
+   accept:".pdf,application/pdf", opts:rangeOpt, out:"halaman-terpilih.pdf",
+   run: async () => {
+     const src = await loadPdf(files[0]);
+     const idx = parseRanges($("o-range").value, src.getPageCount());
+     const doc = await PDFDocument.create();
+     (await doc.copyPages(src, idx)).forEach(p => doc.addPage(p));
+     return doc.save();
+   }},
+  {id:"remove", name:"Hapus halaman", d:"Buang halaman yang tidak diperlukan dari PDF.",
+   accept:".pdf,application/pdf", opts:rangeOpt, out:"tanpa-halaman.pdf",
+   run: async () => {
+     const src = await loadPdf(files[0]);
+     const n = src.getPageCount();
+     const del = new Set(parseRanges($("o-range").value, n));
+     if (del.size >= n) throw new Error("Tidak bisa menghapus semua halaman.");
+     const keep = src.getPageIndices().filter(i => !del.has(i));
+     const doc = await PDFDocument.create();
+     (await doc.copyPages(src, keep)).forEach(p => doc.addPage(p));
+     return doc.save();
+   }},
+  {id:"rotate", name:"Putar PDF", d:"Putar semua halaman, atau hanya halaman tertentu.",
+   accept:".pdf,application/pdf", out:"diputar.pdf",
+   opts:`<label>Sudut<select id="o-angle"><option value="90">90° searah jarum jam</option><option value="180">180°</option><option value="270">90° berlawanan arah</option></select></label>
+         <label>Halaman (kosongkan = semua)<input id="o-range" placeholder="Contoh: 2,4-6"></label>`,
+   run: async () => {
+     const doc = await loadPdf(files[0]);
+     const n = doc.getPageCount(), r = $("o-range").value.trim();
+     const idx = r ? parseRanges(r, n) : doc.getPageIndices();
+     const add = +$("o-angle").value;
+     idx.forEach(i => { const p = doc.getPage(i); p.setRotation(degrees((p.getRotation().angle + add) % 360)); });
+     return doc.save();
+   }},
+  {id:"numbers", name:"Nomor halaman", d:"Tambahkan nomor di setiap halaman.",
+   accept:".pdf,application/pdf", out:"bernomor.pdf",
+   opts:`<label>Posisi<select id="o-pos"><option value="bc">Bawah tengah</option><option value="br">Bawah kanan</option><option value="bl">Bawah kiri</option><option value="tr">Atas kanan</option></select></label>
+         <label>Mulai dari angka<input id="o-start" type="number" value="1" min="0"></label>`,
+   run: async () => {
+     const doc = await loadPdf(files[0]);
+     const font = await doc.embedFont(StandardFonts.Helvetica);
+     const start = parseInt($("o-start").value || "1", 10), pos = $("o-pos").value, size = 11;
+     doc.getPages().forEach((p, i) => {
+       const {width, height} = p.getSize();
+       const t = String(start + i), w = font.widthOfTextAtSize(t, size);
+       const x = pos.endsWith("c") ? (width - w) / 2 : pos.endsWith("l") ? 36 : width - 36 - w;
+       const y = pos.startsWith("b") ? 24 : height - 32;
+       p.drawText(t, {x, y, size, font, color: rgb(.2,.2,.2)});
+     });
+     return doc.save();
+   }},
+  {id:"img", name:"Gambar ke PDF", d:"Ubah JPG atau PNG menjadi satu PDF, satu gambar per halaman.",
+   accept:"image/png,image/jpeg", multi:true, min:1, order:true, out:"gambar.pdf",
+   opts:`<label>Ukuran halaman<select id="o-size"><option value="a4">A4</option><option value="fit">Sesuai ukuran gambar</option></select></label>`,
+   run: async () => {
+     const doc = await PDFDocument.create(), a4 = $("o-size").value === "a4";
+     for (const f of files){
+       const buf = await f.arrayBuffer();
+       const img = f.type === "image/png" ? await doc.embedPng(buf) : await doc.embedJpg(buf);
+       if (!a4){ doc.addPage([img.width, img.height]).drawImage(img, {x:0, y:0, width:img.width, height:img.height}); continue; }
+       const W = 595.28, H = 841.89, m = 28, s = Math.min((W-2*m)/img.width, (H-2*m)/img.height, 1);
+       const w = img.width * s, h = img.height * s;
+       doc.addPage([W, H]).drawImage(img, {x:(W-w)/2, y:(H-h)/2, width:w, height:h});
+     }
+     return doc.save();
+   }},
+  {id:"watermark", name:"Tanda air", d:"Tulis teks miring, misalnya RAHASIA, di semua halaman.", accept:PDF, out:"bertanda-air.pdf",
+   opts:`<label>Teks<input id="o-text" value="RAHASIA" maxlength="40"></label>
+         <label>Ketebalan<select id="o-op"><option value=".15">Tipis</option><option value=".3" selected>Sedang</option><option value=".5">Tebal</option></select></label>`,
+   run: async () => {
+     const t = $("o-text").value.trim(); if (!t) throw new Error("Isi teks tanda air.");
+     const doc = await loadPdf(files[0]), font = await doc.embedFont(StandardFonts.HelveticaBold), op = +$("o-op").value, c = Math.SQRT1_2;
+     try { font.widthOfTextAtSize(t, 10); } catch { throw new Error("Teks memuat karakter yang tidak didukung. Gunakan huruf Latin tanpa emoji."); }
+     doc.getPages().forEach(p => {
+       const {width:W, height:H} = p.getSize(); let s = Math.min(W, H) / 8, w = font.widthOfTextAtSize(t, s);
+       s = Math.min(s, s * Math.hypot(W, H) * .7 / w); w = font.widthOfTextAtSize(t, s);
+       const h = s * .35;
+       p.drawText(t, {x: W/2 - (w/2)*c + h*c, y: H/2 - (w/2)*c - h*c, size: s, font, color: rgb(.5,.5,.5), opacity: op, rotate: degrees(45)});
+     });
+     return doc.save();
+   }},
+  {id:"reorder", name:"Susun ulang halaman", d:"Ubah urutan atau gandakan halaman. Tulis urutan baru, atau ketik balik untuk membalik semuanya.", accept:PDF, out:"disusun-ulang.pdf",
+   opts:`<label>Urutan baru<input id="o-range" placeholder="Contoh: 3,1,2 atau 2-4,1 atau balik"></label>`,
+   run: async () => {
+     const src = await loadPdf(files[0]), n = src.getPageCount(), r = $("o-range").value.trim().toLowerCase();
+     const idx = r === "balik" ? src.getPageIndices().reverse() : parseRanges(r, n);
+     const doc = await PDFDocument.create();
+     (await doc.copyPages(src, idx)).forEach(p => doc.addPage(p));
+     return doc.save();
+   }},
+  {id:"splitall", name:"Pisah jadi beberapa PDF", d:"Pecah satu PDF menjadi banyak file. Kosongkan untuk satu halaman per file, atau tulis bagian dipisah koma.", accept:PDF,
+   opts:`<label>Bagian (opsional)<input id="o-range" placeholder="Contoh: 1-3,4-6,7-"></label>`,
+   run: async () => {
+     const src = await loadPdf(files[0]), n = src.getPageCount(), r = $("o-range").value.trim();
+     const parts = r ? r.split(",").map(s => parseRanges(s, n)) : src.getPageIndices().map(i => [i]);
+     if (parts.length > 200) throw new Error("Terlalu banyak file (maksimal 200).");
+     const out = [];
+     for (let k = 0; k < parts.length; k++){
+       const doc = await PDFDocument.create();
+       (await doc.copyPages(src, parts[k])).forEach(p => doc.addPage(p));
+       out.push({name: `bagian-${k+1}.pdf`, blob: new Blob([await doc.save()], {type:"application/pdf"})});
+     }
+     return out;
+   }},
+  {id:"blank", name:"Sisipkan halaman kosong", d:"Tambahkan halaman kosong di posisi yang Anda tentukan.", accept:PDF, out:"dengan-halaman-kosong.pdf",
+   opts:`<label>Sisipkan setelah halaman (0 = paling awal)<input id="o-after" type="number" min="0" value="1"></label>
+         <label>Jumlah<input id="o-count" type="number" min="1" max="50" value="1"></label>`,
+   run: async () => {
+     const doc = await loadPdf(files[0]), n = doc.getPageCount();
+     const at = parseInt($("o-after").value, 10), cnt = Math.min(50, Math.max(1, parseInt($("o-count").value, 10) || 1));
+     if (!(at >= 0 && at <= n)) throw new Error(`Posisi harus antara 0 dan ${n}.`);
+     const {width, height} = doc.getPage(Math.max(0, at - 1)).getSize();
+     for (let i = 0; i < cnt; i++) doc.insertPage(at, [width, height]);
+     return doc.save();
+   }},
+  {id:"crop", name:"Pangkas tepi", d:"Potong margin putih di sekeliling semua halaman.", accept:PDF, out:"dipangkas.pdf",
+   opts:`<label>Potong dari tiap sisi (mm)<input id="o-mm" type="number" min="1" max="100" value="10"></label>`,
+   run: async () => {
+     const doc = await loadPdf(files[0]), m = (parseFloat($("o-mm").value) || 0) * 2.8346;
+     if (m <= 0) throw new Error("Isi ukuran pangkas dalam mm.");
+     doc.getPages().forEach(p => {
+       const {width:W, height:H} = p.getSize();
+       if (W <= 2*m + 20 || H <= 2*m + 20) throw new Error("Ukuran pangkas terlalu besar untuk halaman ini.");
+       p.setCropBox(m, m, W - 2*m, H - 2*m);
+     });
+     return doc.save();
+   }},
+  {id:"meta", name:"Ubah info dokumen", d:"Ganti judul, penulis, subjek, dan kata kunci. Kolom kosong dibiarkan seperti semula.", accept:PDF, out:"info-diubah.pdf",
+   opts:`<label>Judul<input id="o-title"></label><label>Penulis<input id="o-author"></label>
+         <label>Subjek<input id="o-subject"></label><label>Kata kunci (pisah koma)<input id="o-kw"></label>`,
+   run: async () => {
+     const doc = await loadPdf(files[0]), v = id => $(id).value.trim();
+     if (v("o-title")) doc.setTitle(v("o-title"));
+     if (v("o-author")) doc.setAuthor(v("o-author"));
+     if (v("o-subject")) doc.setSubject(v("o-subject"));
+     if (v("o-kw")) doc.setKeywords(v("o-kw").split(",").map(s => s.trim()).filter(Boolean));
+     return doc.save();
+   }},
+  {id:"pdf2img", name:"PDF ke gambar", d:"Ubah tiap halaman menjadi gambar PNG atau JPG.", accept:PDF,
+   opts:`<label>Format<select id="o-fmt"><option value="png">PNG (tajam)</option><option value="jpeg">JPG (ukuran kecil)</option></select></label>
+         <label>Kualitas<select id="o-sc"><option value="1.5">Standar</option><option value="2.5">Tinggi</option></select></label>
+         <label>Halaman (kosongkan = semua)<input id="o-range" placeholder="Contoh: 1-3"></label>`,
+   run: async () => {
+     const d = await openDoc(files[0]), r = $("o-range").value.trim(), fmt = $("o-fmt").value;
+     const pages = r ? parseRanges(r, d.numPages).map(i => i + 1) : Array.from({length: d.numPages}, (_, i) => i + 1);
+     if (pages.length > 100) throw new Error("Maksimal 100 halaman sekali proses.");
+     const out = [];
+     for (const [k, i] of pages.entries()){
+       say(`Memproses halaman ${k+1} dari ${pages.length}…`);
+       const {blob} = await renderPage(d, i, +$("o-sc").value, "image/" + fmt, .92);
+       out.push({name: `halaman-${i}.${fmt === "png" ? "png" : "jpg"}`, blob});
+     }
+     return out;
+   }},
+  {id:"pdf2txt", name:"PDF ke teks", d:"Ambil seluruh teks dari PDF sebagai file .txt. PDF hasil scan tidak punya teks yang bisa diambil.", accept:PDF,
+   run: async () => {
+     const d = await openDoc(files[0]); let txt = "";
+     for (let i = 1; i <= d.numPages; i++){
+       say(`Membaca halaman ${i} dari ${d.numPages}…`);
+       const c = await (await d.getPage(i)).getTextContent();
+       txt += `--- Halaman ${i} ---\n` + c.items.map(t => t.str + (t.hasEOL ? "\n" : "")).join("") + "\n\n";
+     }
+     if (!txt.replace(/--- Halaman \d+ ---|\s/g, "")) throw new Error("Tidak ada teks yang bisa diambil. PDF ini kemungkinan hasil scan (berupa gambar).");
+     return [{name: "teks.txt", blob: new Blob([txt], {type:"text/plain;charset=utf-8"})}];
+   }},
+  {id:"compress", name:"Kecilkan ukuran PDF", d:"Render ulang halaman sebagai gambar JPG agar file mengecil. Teks tidak bisa lagi dipilih atau dicari.", accept:PDF, out:"diperkecil.pdf",
+   opts:`<label>Tingkat<select id="o-q"><option value="0.8,1.6">Ringan (kualitas tinggi)</option><option value="0.6,1.3" selected>Sedang</option><option value="0.4,1">Kuat (file paling kecil)</option></select></label>`,
+   run: async () => {
+     const d = await openDoc(files[0]), [q, sc] = $("o-q").value.split(",").map(Number), doc = await PDFDocument.create();
+     if (d.numPages > 100) throw new Error("Maksimal 100 halaman sekali proses.");
+     for (let i = 1; i <= d.numPages; i++){
+       say(`Memproses halaman ${i} dari ${d.numPages}…`);
+       const {blob, w, h} = await renderPage(d, i, sc, "image/jpeg", q);
+       doc.addPage([w, h]).drawImage(await doc.embedJpg(await blob.arrayBuffer()), {x:0, y:0, width:w, height:h});
+     }
+     const bytes = await doc.save();
+     if (bytes.length >= files[0].size) throw new Error("Hasilnya tidak lebih kecil dari file asli, jadi tidak dibuat. Coba tingkat yang lebih kuat.");
+     return bytes;
+   }}
+];
+
+// Daftar alat
+const grid = $("tools");
+TOOLS.forEach(t => {
+  const b = document.createElement("button");
+  b.className = "tool"; b.setAttribute("aria-pressed","false"); b.dataset.id = t.id;
+  b.innerHTML = `<b>${t.name}</b><span>${t.d.split(".")[0]}.</span>`;
+  b.onclick = () => select(t);
+  grid.appendChild(b);
+});
+
+function select(t){
+  cur = t; files = [];
+  grid.querySelectorAll(".tool").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.id === t.id)));
+  $("panel").hidden = false;
+  $("pt").textContent = t.name; $("pd").textContent = t.d;
+  $("file").accept = t.accept; $("file").multiple = !!t.multi; $("file").value = "";
+  $("opts").innerHTML = t.opts || "";
+  say(""); render();
+  $("panel").scrollIntoView({behavior: matchMedia("(prefers-reduced-motion:reduce)").matches ? "auto" : "smooth", block:"start"});
+}
+
+const say = (h, err) => { const m = $("msg"); m.className = err ? "err" : ""; m.innerHTML = h; };
+const size = n => n > 1048576 ? (n/1048576).toFixed(1)+" MB" : Math.max(1, Math.round(n/1024))+" KB";
+const esc = s => s.replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+
+function render(){
+  const ul = $("list"); ul.innerHTML = "";
+  files.forEach((f, i) => {
+    const li = document.createElement("li");
+    li.innerHTML = `<span class="n">${esc(f.name)}</span><span class="s">${size(f.size)}</span>`;
+    if (cur.order && files.length > 1){
+      [["↑",-1,"Naikkan"],["↓",1,"Turunkan"]].forEach(([l,d,a]) => {
+        const b = document.createElement("button"); b.textContent = l; b.setAttribute("aria-label", `${a} ${f.name}`);
+        b.disabled = i + d < 0 || i + d >= files.length;
+        b.onclick = () => { [files[i], files[i+d]] = [files[i+d], files[i]]; render(); };
+        li.appendChild(b);
+      });
+    }
+    const x = document.createElement("button"); x.textContent = "Hapus"; x.setAttribute("aria-label", `Hapus ${f.name}`);
+    x.onclick = () => { files.splice(i,1); render(); };
+    li.appendChild(x); ul.appendChild(li);
+  });
+  $("go").textContent = "Proses";
+  $("go").disabled = busy || files.length < (cur.min || 1);
+}
+
+function addFiles(list){
+  if (!cur) return;
+  const ok = [...list].filter(f => cur.accept.split(",").some(a => a.startsWith(".") ? f.name.toLowerCase().endsWith(a) : f.type === a));
+  if (!ok.length){ say("Jenis file tidak sesuai untuk alat ini.", true); return; }
+  files = cur.multi ? files.concat(ok) : [ok[0]];
+  say(""); render();
+}
+$("drop").onclick = () => $("file").click();
+$("drop").onkeydown = e => { if (e.key === "Enter" || e.key === " "){ e.preventDefault(); $("file").click(); } };
+$("file").onchange = e => { addFiles(e.target.files); e.target.value = ""; };
+["dragover","dragenter"].forEach(ev => $("drop").addEventListener(ev, e => { e.preventDefault(); $("drop").classList.add("over"); }));
+["dragleave","drop"].forEach(ev => $("drop").addEventListener(ev, e => { e.preventDefault(); $("drop").classList.remove("over"); }));
+$("drop").addEventListener("drop", e => addFiles(e.dataTransfer.files));
+
+$("go").onclick = async () => {
+  if (busy) return;
+  busy = true; $("go").disabled = true; say("Memproses…");
+  try {
+    const res = await cur.run();
+    if (Array.isArray(res)){
+      say(`Selesai. ${res.length} file:<br>` + res.map(r => `<a href="${URL.createObjectURL(r.blob)}" download="${r.name}">${r.name}</a> (${size(r.blob.size)})`).join("<br>"));
+    } else {
+      const url = URL.createObjectURL(new Blob([res], {type:"application/pdf"}));
+      say(`Selesai. <a href="${url}" download="${cur.out}">Unduh ${cur.out}</a> (${size(res.length)})`);
+    }
+  } catch (e){
+    say(esc(e.message || "Terjadi kesalahan. Pastikan file PDF tidak terkunci password atau rusak."), true);
+  } finally { busy = false; render(); }
+};
+</script>
+</body>
+</html>
